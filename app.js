@@ -12,8 +12,10 @@ const CONFIG = {
   geocodeDelay: 1100,           // ms between Nominatim calls (usage policy)
   geocodeTimeout: 20000,
   overpassTimeout: 90000,
+  overpassRetries: 1,           // retry once on Overpass failure
+  overpassRetryDelay: 3000,     // ms before retry
   defaultBuffer: 50,            // metres added around campus bbox
-  addressBuffer: 100,
+  addressFallbackBuffer: 200,   // wider search when falling back to address-only
   earthRadius: 6371008.8,       // mean radius in metres (WGS-84)
   sqmToSqft: 10.7639,
   mToFt: 3.28084,
@@ -353,16 +355,23 @@ async function analyseSchool(schoolName, address, log, signal) {
   log(`  Geocoding: ${query}`);
 
   let locationData = null;
+  let usedFallback = false;
+
+  // Try school name + address first; then address only as fallback
   const queries = address ? [query, address] : [query];
 
   for (const q of queries) {
     try {
       locationData = await geocodeLocation(q, signal);
       log(`  Found: ${locationData.displayName.split(",").slice(0, 3).join(",")}`);
+      if (q === address && q !== query) usedFallback = true;
       break;
     } catch (e) {
       if (e.name === "AbortError") throw e;
-      if (q !== address) log(`  Retrying with address only...`);
+      if (q !== address) {
+        log(`  Name not found, retrying with address only...`);
+        await sleep(CONFIG.geocodeDelay);
+      }
     }
   }
 
@@ -371,19 +380,37 @@ async function analyseSchool(schoolName, address, log, signal) {
     return [makeErrorRow(schoolName, address, "Geocode failed")];
   }
 
-  await sleep(CONFIG.geocodeDelay);
-
-  let buildings;
-  try {
-    buildings = await fetchBuildings(locationData, signal);
-    log(`  Found ${buildings.length} building footprints`);
-  } catch (e) {
-    if (e.name === "AbortError") throw e;
-    log(`  [SKIP] Overpass failed: ${e.message}`);
-    return [makeErrorRow(schoolName, address, `Overpass failed: ${e.message}`)];
+  // When we fell back to address-only, the result is typically a point/single
+  // building. Widen the search bbox so we capture the whole campus around it.
+  if (usedFallback && !locationData.geojson?.type?.includes("Polygon")) {
+    log(`  Widening search area around address...`);
+    locationData.bbox = makeBboxAroundPoint(
+      locationData.lat, locationData.lon, CONFIG.addressFallbackBuffer,
+    );
   }
 
-  if (buildings.length === 0) {
+  await sleep(CONFIG.geocodeDelay);
+
+  // Fetch buildings from Overpass with retry on failure
+  let buildings;
+  for (let attempt = 0; attempt <= CONFIG.overpassRetries; attempt++) {
+    try {
+      buildings = await fetchBuildings(locationData, signal);
+      log(`  Found ${buildings.length} building footprints`);
+      break;
+    } catch (e) {
+      if (e.name === "AbortError") throw e;
+      if (attempt < CONFIG.overpassRetries) {
+        log(`  Overpass error, retrying in ${CONFIG.overpassRetryDelay / 1000}s...`);
+        await sleep(CONFIG.overpassRetryDelay);
+      } else {
+        log(`  [SKIP] Overpass failed: ${e.message}`);
+        return [makeErrorRow(schoolName, address, `Overpass failed: ${e.message}`)];
+      }
+    }
+  }
+
+  if (!buildings || buildings.length === 0) {
     log(`  [SKIP] No buildings in OSM`);
     return [makeErrorRow(schoolName, address, "No buildings found in OSM")];
   }
