@@ -8,12 +8,16 @@
 // ── Configuration ──────────────────────────────────────────────────────────
 const CONFIG = {
   nominatimUrl: "https://nominatim.openstreetmap.org/search",
-  overpassUrl:  "https://overpass-api.de/api/interpreter",
+  overpassUrls: [
+    "https://overpass-api.de/api/interpreter",
+    "https://overpass.kumi.systems/api/interpreter",
+  ],
   geocodeDelay: 1100,           // ms between Nominatim calls (usage policy)
+  overpassDelay: 500,           // ms pause before each Overpass call
   geocodeTimeout: 20000,
-  overpassTimeout: 90000,
-  overpassRetries: 1,           // retry once on Overpass failure
-  overpassRetryDelay: 3000,     // ms before retry
+  overpassTimeout: 120000,
+  overpassRetries: 2,           // retry up to 2 times on Overpass failure
+  overpassRetryDelay: 5000,     // ms before retry
   defaultBuffer: 50,            // metres added around campus bbox
   addressFallbackBuffer: 200,   // wider search when falling back to address-only
   earthRadius: 6371008.8,       // mean radius in metres (WGS-84)
@@ -163,22 +167,33 @@ function buildOverpassQuery(bbox, bufferMetres) {
   return `[out:json][timeout:60];(way["building"](${b});relation["building"](${b}););out body;>;out skel qt;`;
 }
 
-async function fetchBuildings(locationData, signal) {
+async function fetchBuildings(locationData, signal, log) {
   const buffer = CONFIG.defaultBuffer;
   const query = buildOverpassQuery(locationData.bbox, buffer);
+  const urls = CONFIG.overpassUrls;
 
-  const resp = await fetchWithTimeout(
-    CONFIG.overpassUrl,
-    {
-      method: "POST",
-      body: `data=${encodeURIComponent(query)}`,
-      headers: { "Content-Type": "application/x-www-form-urlencoded" },
-      signal,
-    },
-    CONFIG.overpassTimeout,
-  );
-  const data = await resp.json();
-  return parseOsmElements(data.elements || []);
+  let lastError = null;
+  for (let attempt = 0; attempt <= CONFIG.overpassRetries; attempt++) {
+    const url = urls[attempt % urls.length];
+    try {
+      if (attempt > 0 && log) log(`  Overpass retry ${attempt} via ${new URL(url).host}...`);
+      const resp = await fetchWithTimeout(url, {
+        method: "POST",
+        body: `data=${encodeURIComponent(query)}`,
+        headers: { "Content-Type": "application/x-www-form-urlencoded" },
+        signal,
+      }, CONFIG.overpassTimeout);
+      const data = await resp.json();
+      return parseOsmElements(data.elements || []);
+    } catch (e) {
+      if (e.name === "AbortError") throw e;
+      lastError = e;
+      if (attempt < CONFIG.overpassRetries) {
+        await sleep(CONFIG.overpassRetryDelay);
+      }
+    }
+  }
+  throw lastError || new Error("All Overpass servers failed");
 }
 
 function parseOsmElements(elements) {
@@ -337,11 +352,16 @@ async function fetchWithTimeout(url, opts = {}, timeout = 30000) {
   try {
     const resp = await fetch(url, { ...opts, signal: controller.signal });
     clearTimeout(timerId);
-    if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+    if (!resp.ok) {
+      let detail = "";
+      try { detail = (await resp.text()).slice(0, 200); } catch (_) {}
+      throw new Error(`HTTP ${resp.status}${detail ? ": " + detail : ""}`);
+    }
     return resp;
   } catch (err) {
     clearTimeout(timerId);
     if (callerSignal?.aborted) throw new DOMException("Aborted", "AbortError");
+    if (err.name === "AbortError") throw new Error("Request timed out");
     throw err;
   }
 }
@@ -390,24 +410,16 @@ async function analyseSchool(schoolName, address, log, signal) {
   }
 
   await sleep(CONFIG.geocodeDelay);
+  await sleep(CONFIG.overpassDelay);
 
-  // Fetch buildings from Overpass with retry on failure
   let buildings;
-  for (let attempt = 0; attempt <= CONFIG.overpassRetries; attempt++) {
-    try {
-      buildings = await fetchBuildings(locationData, signal);
-      log(`  Found ${buildings.length} building footprints`);
-      break;
-    } catch (e) {
-      if (e.name === "AbortError") throw e;
-      if (attempt < CONFIG.overpassRetries) {
-        log(`  Overpass error, retrying in ${CONFIG.overpassRetryDelay / 1000}s...`);
-        await sleep(CONFIG.overpassRetryDelay);
-      } else {
-        log(`  [SKIP] Overpass failed: ${e.message}`);
-        return [makeErrorRow(schoolName, address, `Overpass failed: ${e.message}`)];
-      }
-    }
+  try {
+    buildings = await fetchBuildings(locationData, signal, log);
+    log(`  Found ${buildings.length} building footprints`);
+  } catch (e) {
+    if (e.name === "AbortError") throw e;
+    log(`  [SKIP] Overpass failed: ${e.message}`);
+    return [makeErrorRow(schoolName, address, `Overpass failed: ${e.message}`)];
   }
 
   if (!buildings || buildings.length === 0) {
