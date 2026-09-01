@@ -1,0 +1,108 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>School Building Analyzer</title>
+  <link rel="stylesheet" href="style.css">
+  <script src="https://cdn.sheetjs.com/xlsx-0.20.3/package/dist/xlsx.full.min.js"></script>
+</head>
+<body>
+  <header>
+    <h1>School Building Analyzer</h1>
+    <p class="subtitle">Upload a spreadsheet of schools &mdash; get building footprint measurements for every campus</p>
+  </header>
+
+  <main>
+    <!-- Upload Section -->
+    <section id="upload-section" class="card">
+      <h2>1. Upload Spreadsheet</h2>
+      <div id="drop-zone" tabindex="0">
+        <div class="drop-icon">&#128196;</div>
+        <p class="drop-main">Drop your spreadsheet here</p>
+        <p class="drop-sub">or click to browse &mdash; accepts .xlsx, .xls, .csv</p>
+        <input type="file" id="file-input" accept=".xlsx,.xls,.csv" hidden>
+      </div>
+      <div id="file-info" class="hidden">
+        <span id="file-name"></span>
+        <span id="file-rows"></span>
+        <button id="clear-file" title="Remove file">&times;</button>
+      </div>
+    </section>
+
+    <!-- Column Mapping -->
+    <section id="mapping-section" class="card hidden">
+      <h2>2. Confirm Columns</h2>
+      <p class="help-text">We auto-detected the columns below. Change them if needed.</p>
+      <div class="mapping-row">
+        <label for="name-col">School Name column</label>
+        <select id="name-col"></select>
+      </div>
+      <div class="mapping-row">
+        <label for="addr-col">Address column</label>
+        <select id="addr-col"></select>
+      </div>
+      <div id="preview-wrap">
+        <table id="preview-table">
+          <thead><tr id="preview-head"></tr></thead>
+          <tbody id="preview-body"></tbody>
+        </table>
+      </div>
+    </section>
+
+    <!-- Controls -->
+    <section id="controls-section" class="card hidden">
+      <h2>3. Run Analysis</h2>
+      <div class="controls-row">
+        <button id="run-btn" class="btn-primary">Run Analysis</button>
+        <button id="stop-btn" class="btn-secondary" disabled>Stop</button>
+        <span id="status-text"></span>
+      </div>
+      <div class="progress-wrap">
+        <div class="progress-bar"><div id="progress-fill"></div></div>
+        <span id="progress-label">0 / 0</span>
+      </div>
+      <div id="eta-text" class="hidden"></div>
+    </section>
+
+    <!-- Results -->
+    <section id="results-section" class="card hidden">
+      <div class="results-header">
+        <h2>Results <span id="results-count"></span></h2>
+        <button id="export-btn" class="btn-primary">Export to Excel</button>
+      </div>
+      <div id="results-wrap">
+        <table id="results-table">
+          <thead>
+            <tr>
+              <th>School Name</th>
+              <th>Address</th>
+              <th>Building</th>
+              <th>Building Address</th>
+              <th class="num">Linear Ft</th>
+              <th class="num">Sq Ft</th>
+              <th>Status</th>
+            </tr>
+          </thead>
+          <tbody id="results-body"></tbody>
+        </table>
+      </div>
+    </section>
+
+    <!-- Log -->
+    <section id="log-section" class="card hidden">
+      <button id="log-toggle" class="log-toggle-btn">
+        Log <span id="log-arrow">&#9660;</span>
+      </button>
+      <pre id="log-output" class="hidden"></pre>
+    </section>
+  </main>
+
+  <footer>
+    <p>Data from <a href="https://www.openstreetmap.org/copyright" target="_blank">OpenStreetMap</a> contributors.
+    Geocoding by <a href="https://nominatim.openstreetmap.org/" target="_blank">Nominatim</a>.</p>
+  </footer>
+
+  <script src="app.js"></script>
+</body>
+</html>
